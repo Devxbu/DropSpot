@@ -1,43 +1,66 @@
 import { Request, Response } from 'express';
+import AuthService from './auth.service';
 
-const register = (req: Request, res: Response) => {
-    // Implementation will be added later
-    res.json({ message: 'Register endpoint' });
+const register = async (req: Request, res: Response) => {
+    try {
+        const { email, password, username, name } = req.body;
+        const user = await AuthService.register(username, email, password, name);
+        res.json({ message: 'User registered successfully', user });
+    } catch (error: any) {
+        res.status(400).json({ error: error.message });
+    }
 };
 
-const login = (req: Request, res: Response) => {
-    // Implementation will be added later
-    res.json({ message: 'Login endpoint' });
+const login = async (req: Request, res: Response) => {
+    try {
+        const { email, password } = req.body;
+        const { accessToken, refreshToken } = await AuthService.login(email, password);
+        res.json({ accessToken, refreshToken });
+    } catch (error: any) {
+        res.status(400).json({ error: error.message });
+    }
 };
 
-const logout = (req: Request, res: Response) => {
-    // Implementation will be added later
-    res.json({ message: 'Logout endpoint' });
+const logout = async (req: Request, res: Response) => {
+    try {
+        const { refreshToken } = req.body;
+        await AuthService.logout(refreshToken);
+        res.json({ message: 'Logged out successfully' });
+    } catch (error: any) {
+        res.status(400).json({ error: error.message });
+    }
 };
 
-const refresh = (req: Request, res: Response) => {
-    // Implementation will be added later
-    res.json({ message: 'Refresh endpoint' });
+const refresh = async (req: Request, res: Response) => {
+    try {
+        const { refreshToken } = req.body;
+        const { accessToken } = await AuthService.refresh(refreshToken);
+        res.json({ accessToken });
+    } catch (error: any) {
+        res.status(400).json({ error: error.message });
+    }
 };
 
-const getProfile = (req: Request, res: Response) => {
-    // Implementation will be added later
-    res.json({ message: 'Get profile endpoint' });
+interface AuthenticatedRequest extends Request {
+    user?: {
+        userId: string;
+    };
+}
+
+const getProfile = async (req: AuthenticatedRequest, res: Response) => {
+    try {
+        if (!req.user) {
+            return res.status(401).json({ error: 'User not authenticated' });
+        }
+        const { userId } = req.user;
+        const user = await AuthService.getProfile(userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        res.json(user);
+    } catch (error: any) {
+        res.status(400).json({ error: error.message });
+    }
 };
 
-const updateProfile = (req: Request, res: Response) => {
-    // Implementation will be added later
-    res.json({ message: 'Update profile endpoint' });
-};
-
-const adminLogin = (req: Request, res: Response) => {
-    // Implementation will be added later
-    res.json({ message: 'Admin login endpoint' });
-};
-
-const getUsers = (req: Request, res: Response) => {
-    // Implementation will be added later
-    res.json({ message: 'Get users endpoint' });
-};
-
-export { register, login, logout, refresh, getProfile, updateProfile, adminLogin, getUsers };
+export { register, login, logout, refresh, getProfile };
