@@ -2,25 +2,26 @@ import express from "express";
 const router = express.Router();
 
 import { getUsers, getUser, deleteUser, getClaims, deleteClaim, createDrop, getDrops, getDrop, updateDrop, deleteDrop, getDropWaitlist, createClaimWindow, assignClaim, getDropClaims, updateUser } from './admin.controller';
+import adminMiddleware from '../../middleware/adminMiddleware';
+import authMiddleware from '../../middleware/authMiddleware';
 
-router.get("/users", getUsers);
-router.get("/users/:id", getUser);
-router.delete("/users/:id", deleteUser);
-router.put("/users/:id", updateUser);
+router.get("/users", authMiddleware, adminMiddleware, getUsers);
+router.get("/users/:id", authMiddleware, adminMiddleware, getUser);
+router.delete("/users/:id", authMiddleware, adminMiddleware, deleteUser);
+router.put("/users/:id", authMiddleware, adminMiddleware, updateUser);
 
-router.post("/drops", createDrop);
-router.get("/drops", getDrops);
-router.get("/drops/:id", getDrop);
-router.put("/drops/:id", updateDrop);
-router.delete("/drops/:id", deleteDrop);
+router.post("/drops", authMiddleware, adminMiddleware, createDrop);
+router.get("/drops", authMiddleware, adminMiddleware, getDrops);
+router.get("/drops/:id", authMiddleware, adminMiddleware, getDrop);
+router.put("/drops/:id", authMiddleware, adminMiddleware, updateDrop);
+router.delete("/drops/:id", authMiddleware, adminMiddleware, deleteDrop);
 
-router.get("/drops/:id/waitlist", getDropWaitlist);
-router.post("/drops/:id/claim-window", createClaimWindow);
-router.post("/drops/:id/assign-claim", assignClaim);
-router.get("/drops/:id/claims", getDropClaims);
+router.get("/drops/:id/waitlist", authMiddleware, adminMiddleware, getDropWaitlist);
+router.post("/drops/:id/claim-window", authMiddleware, adminMiddleware, createClaimWindow);
+router.post("/drops/:id/assign-claim", authMiddleware, adminMiddleware, assignClaim);
+router.get("/drops/:id/claims", authMiddleware, adminMiddleware, getDropClaims);
 
-router.get("/claims", getClaims);
-router.delete("/claims/:claimId", deleteClaim);
-
+router.get("/claims", authMiddleware, adminMiddleware, getClaims);
+router.delete("/claims/:claimId", authMiddleware, adminMiddleware, deleteClaim);
 
 export default router;
