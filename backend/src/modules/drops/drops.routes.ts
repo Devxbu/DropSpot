@@ -2,7 +2,7 @@ import express from "express";
 const router = express.Router();
 
 import { getDrops, getDrop, addWaitlist, removeWaitlist, claimDrop, getMyDrops } from "./drops.controller";
-import authMiddleware from "../../middleware/adminMiddleware";
+import authMiddleware from "../../middleware/authMiddleware";
 
 router.get("/", authMiddleware, getDrops);
 router.get("/:id", authMiddleware, getDrop);
