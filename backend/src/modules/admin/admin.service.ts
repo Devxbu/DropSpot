@@ -1,9 +1,14 @@
-import pool from "@/config/db";
+import pool from "../../config/db";
 class AdminService {
     constructor() { };
     async getUser(id: string) {
         try {
             const user = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+
+            if (!user.rows[0] || user.rowCount === 0) {
+                throw new Error('User not found');
+            }
+
             return user.rows[0];
         } catch (error) {
             throw error;
@@ -12,6 +17,11 @@ class AdminService {
     async getUsers() {
         try {
             const users = await pool.query('SELECT * FROM users');
+
+            if (users.rowCount === 0) {
+                throw new Error('No users found');
+            }
+
             return users.rows;
         } catch (error) {
             throw error;
@@ -43,6 +53,11 @@ class AdminService {
     async getClaims() {
         try {
             const claims = await pool.query('SELECT * FROM claim_codes');
+
+            if (claims.rowCount === 0 || !claims.rows) {
+                throw new Error('No claims found');
+            }
+
             return claims.rows;
         } catch (error) {
             throw error;
@@ -67,6 +82,11 @@ class AdminService {
     async getDrops() {
         try {
             const drops = await pool.query('SELECT * FROM drops');
+
+            if (drops.rowCount === 0 || !drops.rows) {
+                throw new Error('No drops found');
+            }
+
             return drops.rows;
         } catch (error) {
             throw error;
@@ -75,6 +95,11 @@ class AdminService {
     async getDrop(id: string) {
         try {
             const drop = await pool.query('SELECT * FROM drops WHERE id = $1', [id]);
+            
+            if (drop.rowCount === 0 || !drop.rows) {
+                throw new Error('Drop not found');
+            }
+            
             return drop.rows[0];
         } catch (error) {
             throw error;
@@ -110,6 +135,11 @@ class AdminService {
     async getDropWaitlist(id: string) {
         try {
             const waitlist = await pool.query('SELECT * FROM drop_waitlist WHERE drop_id = $1', [id]);
+            
+            if (waitlist.rowCount === 0 || !waitlist.rows) {
+                throw new Error('No waitlist found for this drop');
+            }
+            
             return waitlist.rows;
         } catch (error) {
             throw error;
@@ -134,6 +164,11 @@ class AdminService {
     async getDropClaims(dropId: string) {
         try {
             const claims = await pool.query('SELECT * FROM claim_codes WHERE drop_id = $1', [dropId]);
+            
+            if (claims.rowCount === 0 || !claims.rows) {
+                throw new Error('No claims found for this drop');
+            }
+            
             return claims.rows;
         } catch (error) {
             throw error;
