@@ -29,17 +29,71 @@ class DropService {
     }
 
     async addWaitlist(id: string, userId: string) {
+        const client = await pool.connect();
         try {
+            await client.query('BEGIN');
+            
+            // Set transaction isolation level to SERIALIZABLE for this operation
+            await client.query('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');
+
+            // Check if drop exists and is active
+            const drop = await client.query(
+                'SELECT * FROM drops WHERE id = $1 AND start_time <= NOW() AND end_time > NOW() FOR UPDATE',
+                [id]
+            );
+            
+            if (drop.rows.length === 0) {
+                throw new Error("Drop not found or not active");
+            }
+
             // Check if the user is already on the waitlist to prevent duplicates
-            const exists = await pool.query('SELECT * FROM waitlist WHERE drop_id = $1 AND user_id = $2', [id, userId]);
+            const exists = await client.query(
+                'SELECT id FROM waitlist WHERE drop_id = $1 AND user_id = $2 FOR UPDATE', 
+                [id, userId]
+            );
+            
             if (exists.rows.length > 0) {
                 throw new Error("User already joined the waitlist for this drop");
             }
 
-            const waitlist = await pool.query('INSERT INTO waitlist (drop_id, user_id) VALUES ($1, $2) RETURNING *', [id, userId]);
+            // Get user's account creation time in a single query
+            const userResult = await client.query(
+                `SELECT created_at, 
+                (SELECT COUNT(*) FROM waitlist 
+                 WHERE user_id = $1 
+                 AND joined_at > NOW() - INTERVAL '1 hour') as recent_joins
+                FROM users WHERE id = $1 FOR UPDATE`,
+                [userId]
+            );
+            
+            if (userResult.rows.length === 0) {
+                throw new Error("User not found");
+            }
+            
+            const userCreatedAt = new Date(userResult.rows[0].created_at);
+            const now = new Date();
+            
+            // Calculate metrics for priority score
+            const accountAgeDays = Math.max(0, Math.floor((now.getTime() - userCreatedAt.getTime()) / (1000 * 60 * 60 * 24)));
+            const signupLatencyMs = Math.max(0, now.getTime() - userCreatedAt.getTime());
+            const rapidActions = parseInt(userResult.rows[0].recent_joins, 10) + 1; // +1 for current join
+
+            // Insert into waitlist with calculated priority score
+            const waitlist = await client.query(
+                `INSERT INTO waitlist 
+                (drop_id, user_id, signup_latency_ms, account_age_days, rapid_actions) 
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING *`, 
+                [id, userId, signupLatencyMs, accountAgeDays, rapidActions]
+            );
+
+            await client.query('COMMIT');
             return waitlist.rows[0];
         } catch (error) {
+            await client.query('ROLLBACK');
             throw error;
+        } finally {
+            client.release();
         }
     }
 
@@ -57,29 +111,85 @@ class DropService {
         }
     }
     async claimDrop(id: string, userId: string) {
+        const client = await pool.connect();
         try {
-            // Check if claim window is open
-            const claimWindow = await pool.query('SELECT * FROM claim_windows WHERE drop_id = $1 AND start_time <= NOW() AND end_time > NOW()', [id]);
+            await client.query('BEGIN');
+            await client.query('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');
+
+            // Check if claim window is open and lock the row
+            const claimWindow = await client.query(
+                `SELECT * FROM claim_windows 
+                 WHERE drop_id = $1 
+                 AND (closed_at IS NULL OR closed_at > NOW())
+                 AND opened_at <= NOW()
+                 FOR UPDATE`,
+                [id]
+            );
+            
             if (claimWindow.rows.length === 0) {
                 throw new Error("Claim window is not open for this drop");
             }
 
-            // Check if user is on waitlist
-            const waitlist = await pool.query('SELECT * FROM waitlist WHERE drop_id = $1 AND user_id = $2', [id, userId]);
-            if (waitlist.rows.length === 0) {
-                throw new Error("You are not on the waitlist for this drop");
+            // Get the user's position in the waitlist with row-level lock
+            const userInWaitlist = await client.query(
+                `SELECT w.id as waitlist_id, w.priority_score, w.joined_at
+                FROM waitlist w
+                WHERE w.drop_id = $1 AND w.user_id = $2
+                FOR UPDATE`,
+                [id, userId]
+            );
+
+            if (userInWaitlist.rows.length === 0) {
+                throw new Error("You are not in the waitlist for this drop");
             }
 
-            // Check if user already claimed
-            const existingClaim = await pool.query('SELECT * FROM claims WHERE drop_id = $1 AND user_id = $2', [id, userId]);
-            if (existingClaim.rows.length > 0) {
-                throw new Error("You already claimed this drop");
+            // Check if user is at the top of the waitlist
+            const topUser = await client.query(
+                `SELECT user_id, priority_score, joined_at
+                FROM waitlist 
+                WHERE drop_id = $1 
+                ORDER BY priority_score DESC, joined_at ASC 
+                LIMIT 1 FOR UPDATE`,
+                [id]
+            );
+
+            if (topUser.rows.length === 0) {
+                throw new Error("No users in the waitlist for this drop");
             }
 
-            // If user is eligible, create claim
+            const currentUser = userInWaitlist.rows[0];
+            const topUserData = topUser.rows[0];
+
+            // Verify the current user is the one with the highest priority
+            if (currentUser.priority_score !== topUserData.priority_score || 
+                currentUser.joined_at > topUserData.joined_at) {
+                throw new Error("It's not your turn to claim this drop");
+            }
+
+            // Generate a unique claim code
             const claimCode = Math.random().toString(36).substring(2, 10).toUpperCase();
-            const newClaim = await pool.query('INSERT INTO claims (user_id, drop_id, claim_code, claimed_at) VALUES ($1, $2, $3, NOW()) RETURNING *', [userId, id, claimCode]);
-            return newClaim.rows[0].claim_code;
+            
+            // Create claim code and remove from waitlist in a single transaction
+            const newClaim = await client.query(
+                `WITH deleted_waitlist AS (
+                    DELETE FROM waitlist 
+                    WHERE id = $1 AND user_id = $2 AND drop_id = $3
+                    RETURNING *
+                )
+                INSERT INTO claim_codes 
+                (user_id, drop_id, waitlist_id, code, claimed, claimed_at)
+                SELECT $2, $3, $1, $4, true, NOW()
+                FROM deleted_waitlist
+                RETURNING *`,
+                [currentUser.waitlist_id, userId, id, claimCode]
+            );
+
+            if (newClaim.rows.length === 0) {
+                throw new Error("Failed to process claim");
+            }
+
+            await client.query('COMMIT');
+            return { claimCode, claimedAt: newClaim.rows[0].claimed_at };
         } catch (error) {
             console.error(error);
             throw error;

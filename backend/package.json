@@ -27,6 +27,7 @@
     "pino": "^9.0.0",
     "pino-pretty": "^11.2.2",
     "supertest": "^7.1.4",
+    "uuid": "^13.0.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
