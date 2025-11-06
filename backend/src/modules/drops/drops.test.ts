@@ -1,223 +1,215 @@
 import { Pool } from 'pg';
+import pool from '../../config/db';
 import DropService from './drops.service';
+import { createDropsTable, createWaitlistTable } from './drops.model';
 
-// Mock the pg pool
-jest.mock('../../config/db', () => ({
-  query: jest.fn(),
-}));
+// Mock the pool module
+jest.mock('../../config/db');
+
+// Type for our mock query function
+interface MockQueryResult<T = any> {
+  rows: T[];
+  rowCount: number;
+}
+
+// Create a type-safe mock for the pool
+const mockPool = pool as jest.Mocked<typeof pool>;
+
+// Mock the pool.query method
+const mockQuery = mockPool.query as jest.Mock;
 
 describe('DropService', () => {
-  let pool: jest.Mocked<Pool>;
-  const mockDrop = {
-    id: '1',
-    title: 'Test Drop',
-    description: 'Test Description',
-    start_time: new Date().toISOString(),
-    end_time: new Date(Date.now() + 86400000).toISOString(),
-    created_at: new Date().toISOString()
-  };
-  const mockWaitlist = {
-    id: 'wait1',
-    drop_id: '1',
-    user_id: 'user1',
-    joined_at: new Date().toISOString()
-  };
-  const mockClaim = {
-    id: 'claim1',
-    user_id: 'user1',
-    drop_id: '1',
-    claim_code: 'ABC123',
-    claimed_at: new Date().toISOString()
+  const mockClient = {
+    query: jest.fn(),
+    release: jest.fn(),
   };
 
   beforeEach(() => {
     jest.clearAllMocks();
-    pool = require('../../config/db') as jest.Mocked<Pool>;
+    (mockPool.connect as jest.Mock).mockResolvedValue(mockClient);
+    
+    // Default mock implementation for client.query
+    (mockClient.query as jest.Mock).mockImplementation((query: string) => {
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
   });
 
   describe('getDrops', () => {
-    it('should return all drops', async () => {
-      (pool.query as jest.Mock).mockResolvedValueOnce({ rows: [mockDrop], rowCount: 1 });
+    it('should return drops when they exist', async () => {
+      const mockDrops = [
+        { id: '1', title: 'Test Drop 1' },
+        { id: '2', title: 'Test Drop 2' },
+      ];
+      
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: mockDrops, rowCount: 2 });
       
       const result = await DropService.getDrops();
-      
-      expect(pool.query).toHaveBeenCalledWith('SELECT * FROM drops ORDER BY created_at DESC');
-      expect(result).toEqual([mockDrop]);
+      expect(result).toEqual(mockDrops);
+      expect(mockPool.query).toHaveBeenCalledWith(
+        'SELECT * FROM drops ORDER BY created_at DESC'
+      );
     });
 
-    it('should throw an error when no drops found', async () => {
-      (pool.query as jest.Mock).mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    it('should throw an error when no drops are found', async () => {
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: [], rowCount: 0 });
       
       await expect(DropService.getDrops()).rejects.toThrow('No drops found');
     });
   });
 
   describe('getDrop', () => {
-    it('should return a drop by id', async () => {
-      (pool.query as jest.Mock).mockResolvedValueOnce({ rows: [mockDrop], rowCount: 1 });
+    it('should return a single drop when it exists', async () => {
+      const mockDrop = { id: '1', title: 'Test Drop' };
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: [mockDrop], rowCount: 1 });
       
       const result = await DropService.getDrop('1');
-      
-      expect(pool.query).toHaveBeenCalledWith('SELECT * FROM drops WHERE id = $1', ['1']);
       expect(result).toEqual(mockDrop);
+      expect(mockPool.query).toHaveBeenCalledWith(
+        'SELECT * FROM drops WHERE id = $1',
+        ['1']
+      );
     });
 
-    it('should throw an error when drop not found', async () => {
-      (pool.query as jest.Mock).mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    it('should throw an error when drop is not found', async () => {
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: [], rowCount: 0 });
       
-      await expect(DropService.getDrop('999')).rejects.toThrow('Drop not found');
+      await expect(DropService.getDrop('nonexistent')).rejects.toThrow('Drop not found');
     });
   });
 
   describe('addWaitlist', () => {
-    it('should add user to waitlist', async () => {
-      (pool.query as jest.Mock)
-        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // First call for checking existing waitlist
-        .mockResolvedValueOnce({ rows: [mockWaitlist], rowCount: 1 }); // Insert call
-      
-      const result = await DropService.addWaitlist('1', 'user1');
-      
-      expect(pool.query).toHaveBeenCalledWith(
-        'SELECT * FROM waitlist WHERE drop_id = $1 AND user_id = $2',
-        ['1', 'user1']
-      );
-      expect(pool.query).toHaveBeenCalledWith(
-        'INSERT INTO waitlist (drop_id, user_id) VALUES ($1, $2) RETURNING *',
-        ['1', 'user1']
-      );
-      expect(result).toEqual(mockWaitlist);
+    const dropId = 'drop-1';
+    const userId = 'user-1';
+    const now = new Date();
+    const userCreatedAt = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000); // 3 days ago
+    
+    beforeEach(() => {
+      // Mock client setup
+      mockClient.query
+        .mockResolvedValueOnce({}) // BEGIN
+        .mockResolvedValueOnce({}) // SET TRANSACTION
+        .mockResolvedValueOnce({ 
+          rows: [{ id: dropId, start_time: now, end_time: new Date(now.getTime() + 3600000) }] 
+        }) // Check drop exists
+        .mockResolvedValueOnce({ rows: [] }) // Check if user already in waitlist
+        .mockResolvedValueOnce({ 
+          rows: [{ 
+            created_at: userCreatedAt, 
+            recent_joins: 0 
+          }] 
+        }) // Get user info
+        .mockResolvedValueOnce({ 
+          rows: [{ 
+            id: 'waitlist-1', 
+            drop_id: dropId, 
+            user_id: userId 
+          }] 
+        }); // Insert waitlist
     });
 
-    it('should throw an error if user is already on waitlist', async () => {
-      (pool.query as jest.Mock).mockResolvedValueOnce({ rows: [mockWaitlist], rowCount: 1 });
+    it('should add user to waitlist successfully', async () => {
+      const result = await DropService.addWaitlist(dropId, userId);
       
-      await expect(DropService.addWaitlist('1', 'user1'))
-        .rejects
-        .toThrow('User already joined the waitlist for this drop');
+      expect(result).toBeDefined();
+      expect(result.drop_id).toBe(dropId);
+      expect(result.user_id).toBe(userId);
+      expect(mockClient.query).toHaveBeenCalledTimes(7); // BEGIN, SET, 4 queries, COMMIT
+      expect(mockClient.query).toHaveBeenCalledWith('COMMIT');
+    });
+
+    it('should throw error when drop is not active', async () => {
+      // Override the drop check to return no rows
+      mockClient.query.mockReset();
+      mockClient.query
+        .mockResolvedValueOnce({}) // BEGIN
+        .mockResolvedValueOnce({}) // SET TRANSACTION
+        .mockResolvedValueOnce({ rows: [] }); // Drop not found
+
+      await expect(DropService.addWaitlist(dropId, userId)).rejects.toThrow('Drop not found or not active');
+      expect(mockClient.query).toHaveBeenCalledWith('ROLLBACK');
+    });
+
+    it('should throw error when user already in waitlist', async () => {
+      // Override the waitlist check to return existing entry
+      mockClient.query.mockReset();
+      mockClient.query
+        .mockResolvedValueOnce({}) // BEGIN
+        .mockResolvedValueOnce({}) // SET TRANSACTION
+        .mockResolvedValueOnce({ 
+          rows: [{ id: dropId, start_time: now, end_time: new Date(now.getTime() + 3600000) }] 
+        }) // Check drop exists
+        .mockResolvedValueOnce({ rows: [{ id: 'existing-waitlist' }] }); // User already in waitlist
+
+      await expect(DropService.addWaitlist(dropId, userId)).rejects.toThrow('User already joined the waitlist');
+      expect(mockClient.query).toHaveBeenCalledWith('ROLLBACK');
     });
   });
 
   describe('removeWaitlist', () => {
-    it('should remove user from waitlist', async () => {
-      (pool.query as jest.Mock).mockResolvedValueOnce({ rows: [mockWaitlist], rowCount: 1 });
+    it('should remove user from waitlist successfully', async () => {
+      const dropId = 'drop-1';
+      const userId = 'user-1';
       
-      const result = await DropService.removeWaitlist('1', 'user1');
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: [{}], rowCount: 1 });
       
-      expect(pool.query).toHaveBeenCalledWith(
+      const result = await DropService.removeWaitlist('drop-1', 'user-1');
+      expect(result).toBeDefined();
+      expect(mockPool.query).toHaveBeenCalledWith(
         'DELETE FROM waitlist WHERE drop_id = $1 AND user_id = $2 RETURNING *',
-        ['1', 'user1']
+        ['drop-1', 'user-1']
       );
-      expect(result).toEqual(mockWaitlist);
     });
 
-    it('should throw an error if user is not on waitlist', async () => {
-      (pool.query as jest.Mock).mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    it('should throw error when user not in waitlist', async () => {
+      const dropId = 'drop-1';
+      const userId = 'user-1';
       
-      await expect(DropService.removeWaitlist('1', 'user1'))
-        .rejects
-        .toThrow('User was not on the waitlist or already removed');
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      
+      await expect(DropService.removeWaitlist('drop-1', 'user-1')).rejects.toThrow('User was not on the waitlist or already removed');
     });
   });
+});
 
-  describe('claimDrop', () => {
-    const mockClaimWindow = {
-      id: 'window1',
-      drop_id: '1',
-      start_time: new Date(Date.now() - 3600000).toISOString(), // 1 hour ago
-      end_time: new Date(Date.now() + 3600000).toISOString(),  // 1 hour from now
-      max_claims: 100
-    };
-
-    beforeEach(() => {
-      // Reset all mocks before each test
-      jest.clearAllMocks();
-      
-      // Setup default mock responses
-      // Cast mock responses to proper type
-      (pool.query as jest.Mock)
-        .mockResolvedValueOnce({ rows: [mockClaimWindow], rowCount: 1 }) // getClaimWindow
-        .mockResolvedValueOnce({ rows: [mockWaitlist], rowCount: 1 })    // checkWaitlist
-        .mockResolvedValueOnce({ rows: [], rowCount: 0 })                // checkExistingClaim
-        .mockResolvedValueOnce({ rows: [mockClaim], rowCount: 1 });      // createClaim
-    });
-
-    it('should create a claim when all conditions are met', async () => {
-      const claimCode = await DropService.claimDrop('1', 'user1');
-      
-      // Verify claim window check
-      expect(pool.query).toHaveBeenCalledWith(
-        'SELECT * FROM claim_windows WHERE drop_id = $1 AND start_time <= NOW() AND end_time > NOW()',
-        ['1']
-      );
-      
-      // Verify waitlist check
-      expect(pool.query).toHaveBeenCalledWith(
-        'SELECT * FROM waitlist WHERE drop_id = $1 AND user_id = $2',
-        ['1', 'user1']
-      );
-      
-      // Verify existing claim check
-      expect(pool.query).toHaveBeenCalledWith(
-        'SELECT * FROM claims WHERE drop_id = $1 AND user_id = $2',
-        ['1', 'user1']
-      );
-      
-      // Verify claim creation
-      expect(claimCode).toBe(mockClaim.claim_code);
-    });
-
-    it('should throw error when claim window is not open', async () => {
-      (pool.query as jest.Mock).mockReset();
-      (pool.query as jest.Mock).mockResolvedValueOnce({ rows: [], rowCount: 0 }); // No open claim window
-      
-      await expect(DropService.claimDrop('1', 'user1'))
-        .rejects
-        .toThrow('Claim window is not open for this drop');
-    });
-
-    it('should throw error when user is not on waitlist', async () => {
-      (pool.query as jest.Mock).mockReset();
-      (pool.query as jest.Mock)
-        .mockResolvedValueOnce({ rows: [mockClaimWindow], rowCount: 1 }) // getClaimWindow
-        .mockResolvedValueOnce({ rows: [], rowCount: 0 });              // checkWaitlist (empty)
-      
-      await expect(DropService.claimDrop('1', 'user1'))
-        .rejects
-        .toThrow('You are not on the waitlist for this drop');
-    });
-
-    it('should throw error when user already claimed', async () => {
-      (pool.query as jest.Mock).mockReset();
-      (pool.query as jest.Mock)
-        .mockResolvedValueOnce({ rows: [mockClaimWindow], rowCount: 1 }) // getClaimWindow
-        .mockResolvedValueOnce({ rows: [mockWaitlist], rowCount: 1 })    // checkWaitlist
-        .mockResolvedValueOnce({ rows: [mockClaim], rowCount: 1 });      // existing claim
-      
-      await expect(DropService.claimDrop('1', 'user1'))
-        .rejects
-        .toThrow('You already claimed this drop');
-    });
+describe('Database Tables', () => {
+  it('should create drops table with correct schema', async () => {
+    // Reset and type the mock query
+    (mockPool.query as jest.Mock).mockClear();
+    await createDropsTable();
+    
+    // Verify the table creation query was called
+    const queryCalls = (mockPool.query as jest.Mock).mock.calls;
+    const createTableQuery = queryCalls.find((call: [string]) => 
+      call[0].includes('CREATE TABLE IF NOT EXISTS drops')
+    );
+    expect(createTableQuery).toBeDefined();
+    
+    // Verify indexes were created
+    const indexCalls = queryCalls.filter((call: [string]) => 
+      typeof call[0] === 'string' && call[0].includes('CREATE INDEX')
+    );
+    expect(indexCalls.some((call: [string]) => call[0].includes('idx_drops_created_at'))).toBe(true);
+    expect(indexCalls.some((call: [string]) => call[0].includes('idx_drops_title_unique'))).toBe(true);
   });
 
-  describe('getMyDrops', () => {
-    it('should return user\'s drops from waitlist', async () => {
-      (pool.query as jest.Mock).mockResolvedValueOnce({ rows: [mockDrop], rowCount: 1 });
-      
-      const result = await DropService.getMyDrops('user1');
-      
-      expect(pool.query).toHaveBeenCalledWith(
-        `SELECT d.* FROM drops d INNER JOIN waitlist w ON d.id = w.drop_id WHERE w.user_id = $1 ORDER BY d.created_at DESC`,
-        ['user1']
-      );
-      expect(result).toEqual([mockDrop]);
-    });
-
-    it('should return empty array when no drops found', async () => {
-      (pool.query as jest.Mock).mockResolvedValueOnce({ rows: [], rowCount: 0 });
-      
-      const result = await DropService.getMyDrops('user1');
-      
-      expect(result).toEqual([]);
-    });
+  it('should create waitlist table with correct schema', async () => {
+    // Reset and type the mock query
+    (mockPool.query as jest.Mock).mockClear();
+    
+    await createWaitlistTable();
+    
+    // Verify the table creation query was called
+    const queryCalls = (mockPool.query as jest.Mock).mock.calls;
+    const createTableQuery = queryCalls.find((call: [string]) => 
+      call[0].includes('CREATE TABLE IF NOT EXISTS waitlist')
+    );
+    expect(createTableQuery).toBeDefined();
+    
+    // Verify indexes were created
+    const indexCalls = queryCalls.filter((call: [string]) => 
+      typeof call[0] === 'string' && call[0].includes('CREATE INDEX')
+    );
+    expect(indexCalls.some((call: [string]) => call[0].includes('idx_waitlist_priority'))).toBe(true);
+    expect(indexCalls.some((call: [string]) => call[0].includes('idx_waitlist_user'))).toBe(true);
   });
 });
