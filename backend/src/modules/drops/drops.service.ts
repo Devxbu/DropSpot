@@ -6,6 +6,9 @@ class DropService {
         try {
             // Fetch all active drops ordered by creation time (optional improvement)
             const drops = await pool.query('SELECT * FROM drops ORDER BY created_at DESC');
+            if (drops.rows.length === 0 || drops.rowCount === 0) {
+                throw new Error("No drops found");
+            }
             return drops.rows;
         } catch (error) {
             throw error;
@@ -86,14 +89,7 @@ class DropService {
     async getMyDrops(userId: string) {
         try {
             // Use a JOIN to improve performance instead of multiple queries
-            const result = await pool.query(`SELECT d.* 
-                FROM drops d
-                INNER JOIN waitlist w ON d.id = w.drop_id
-                WHERE w.user_id = $1
-                ORDER BY d.created_at DESC`,
-                [userId]
-            );
-
+            const result = await pool.query(`SELECT d.* FROM drops d INNER JOIN waitlist w ON d.id = w.drop_id WHERE w.user_id = $1 ORDER BY d.created_at DESC`, [userId]);
             return result.rows;
         } catch (error) {
             throw error;

@@ -29,7 +29,7 @@ class AdminService {
     };
     async deleteUser(id: string) {
         try {
-            const result = await pool.query('DELETE FROM users WHERE id = $1', [id]);
+            const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING *', [id]);
             return result;
         } catch (error) {
             throw error;
@@ -44,7 +44,7 @@ class AdminService {
             const role = userData.role ? userData.role : user.rows[0].role;
 
             // Update infos
-            const update = await pool.query('UPDATE users SET username = $1, name = $2, role = $3 WHERE id = $4', [username, name, role, id]);
+            const update = await pool.query('UPDATE users SET username = $1, name = $2, role = $3 WHERE id = $4 RETURNING *', [username, name, role, id]);
             return update.rows[0];
         } catch (error) {
             throw error;
@@ -65,7 +65,7 @@ class AdminService {
     };
     async deleteClaim(claimId: string) {
         try {
-            const result = await pool.query('DELETE FROM claim_codes WHERE id = $1', [claimId]);
+            const result = await pool.query('DELETE FROM claim_codes WHERE id = $1 RETURNING *', [claimId]);
             return result;
         } catch (error) {
             throw error;
@@ -95,11 +95,11 @@ class AdminService {
     async getDrop(id: string) {
         try {
             const drop = await pool.query('SELECT * FROM drops WHERE id = $1', [id]);
-            
+
             if (drop.rowCount === 0 || !drop.rows) {
                 throw new Error('Drop not found');
             }
-            
+
             return drop.rows[0];
         } catch (error) {
             throw error;
@@ -113,7 +113,7 @@ class AdminService {
             const description = dropData.description || drop.rows[0].description;
             const startTime = dropData.startTime || drop.rows[0].start_time;
             const endTime = dropData.endTime || drop.rows[0].end_time;
-            
+
             // Update drop
             const updatedDrop = await pool.query(
                 'UPDATE drops SET title = $1, description = $2, start_time = $3, end_time = $4 WHERE id = $5 RETURNING *',
@@ -126,7 +126,7 @@ class AdminService {
     };
     async deleteDrop(id: string) {
         try {
-            const result = await pool.query('DELETE FROM drops WHERE id = $1', [id]);
+            const result = await pool.query('DELETE FROM drops WHERE id = $1 RETURNING *', [id]);
             return result;
         } catch (error) {
             throw error;
@@ -134,12 +134,12 @@ class AdminService {
     };
     async getDropWaitlist(id: string) {
         try {
-            const waitlist = await pool.query('SELECT * FROM drop_waitlist WHERE drop_id = $1', [id]);
-            
+            const waitlist = await pool.query('SELECT * FROM waitlist WHERE drop_id = $1', [id]);
+
             if (waitlist.rowCount === 0 || !waitlist.rows) {
                 throw new Error('No waitlist found for this drop');
             }
-            
+
             return waitlist.rows;
         } catch (error) {
             throw error;
@@ -147,6 +147,9 @@ class AdminService {
     };
     async createClaimWindow(dropId: string, windowData: any) {
         try {
+            if (new Date(windowData.endTime) <= new Date(windowData.startTime)) {
+                throw new Error("Invalid claim window time range");
+            }
             const window = await pool.query('INSERT INTO claim_windows (drop_id, start_time, end_time, max_claims) VALUES ($1, $2, $3, $4) RETURNING *', [dropId, windowData.startTime, windowData.endTime, windowData.maxClaims]);
             return window.rows[0];
         } catch (error) {
@@ -155,7 +158,7 @@ class AdminService {
     };
     async assignClaim(windowId: string, claimData: any) {
         try {
-            const claim = await pool.query('INSERT INTO claim_codes (window_id, user_id, code, assigned_at) VALUES ($1, $2, $3, $4) RETURNING *', [windowId, claimData.userId, claimData.code, new Date()]);
+            const claim = await pool.query('INSERT INTO claim_codes (window_id, drop_id, user_id, code, assigned_at) VALUES ($1, $2, $3, $4, $5) RETURNING *', [windowId, claimData.dropId, claimData.userId, claimData.code, new Date()]);
             return claim.rows[0];
         } catch (error) {
             throw error;
@@ -164,11 +167,11 @@ class AdminService {
     async getDropClaims(dropId: string) {
         try {
             const claims = await pool.query('SELECT * FROM claim_codes WHERE drop_id = $1', [dropId]);
-            
+
             if (claims.rowCount === 0 || !claims.rows) {
                 throw new Error('No claims found for this drop');
             }
-            
+
             return claims.rows;
         } catch (error) {
             throw error;
