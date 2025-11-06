@@ -38,4 +38,4 @@ const createWaitlistTable = async () => {
     }
 }
 
-export default {createDropsTable, createWaitlistTable};
+export {createDropsTable, createWaitlistTable};
